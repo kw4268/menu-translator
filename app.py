@@ -150,10 +150,19 @@ def images():
     if not query:
         return jsonify({"images": []})
 
+    # A safety backstop: never show images from these adult/unsafe domains,
+    # even if a search somehow returns one.
+    BLOCKED = ("xhcdn", "xhamster", "pornhub", "phncdn", "rt.com", "xvideos",
+               "xnxx", "redtube", "porn", "nsfw", "adult")
+
     try:
-        # The web page sends an AI-cleaned dish name, so we search it directly.
-        results = DDGS().images(query, max_results=4)
-        urls = [r["image"] for r in results if r.get("image")][:3]
+        # safesearch="on" filters out explicit results. We also add "food" to
+        # the query to firmly bias the search toward food photos.
+        results = DDGS().images(f"{query} food", safesearch="on", max_results=10)
+        urls = [
+            r["image"] for r in results
+            if r.get("image") and not any(bad in r["image"].lower() for bad in BLOCKED)
+        ][:3]
     except Exception:  # noqa: BLE001 - if search fails, just show no photos
         urls = []
 

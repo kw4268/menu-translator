@@ -196,7 +196,15 @@
 
       try {
         const response = await fetch('/translate', { method: 'POST', body: formData });
-        const data = await response.json();
+        // Read as text first, then parse — so a non-JSON reply never crashes the page.
+        const raw = await response.text();
+        let data;
+        try {
+          data = JSON.parse(raw);
+        } catch (parseErr) {
+          status.textContent = '服务器正在唤醒，请过一会儿再试一次。(Server waking up — please try again in a moment.)';
+          return;
+        }
 
         if (data.error) { status.textContent = '出错了：' + data.error; return; }
 

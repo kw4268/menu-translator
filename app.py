@@ -12,6 +12,7 @@ You don't need to understand every line. The comments explain the important bits
 """
 
 import base64
+import io
 import json
 import os
 
@@ -19,6 +20,15 @@ from anthropic import Anthropic
 from ddgs import DDGS
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
+from PIL import Image
+
+# Lets us read iPhone "HEIC" photos. If the library isn't available, we simply
+# skip it — common formats (JPEG/PNG) still work.
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except Exception:  # noqa: BLE001
+    pass
 
 # Load the secret API key from the private ".env" file.
 # override=True makes our .env file win over any empty/old key already in the system.
@@ -85,6 +95,21 @@ def home():
     return render_template("index.html")
 
 
+def to_jpeg(raw_bytes):
+    """Turn any uploaded photo (HEIC, PNG, huge phone photo, etc.) into a tidy
+    JPEG that the AI can always read. Shrinks very large photos to speed things up."""
+    img = Image.open(io.BytesIO(raw_bytes))
+    img = img.convert("RGB")  # drop transparency / odd color modes
+    # The AI sees no benefit beyond ~1600px, so shrink big photos for speed.
+    max_side = 1600
+    if max(img.size) > max_side:
+        scale = max_side / max(img.size)
+        img = img.resize((int(img.width * scale), int(img.height * scale)))
+    buffer = io.BytesIO()
+    img.save(buffer, format="JPEG", quality=85)
+    return buffer.getvalue()
+
+
 @app.route("/translate", methods=["POST"])
 def translate():
     """Receive a menu photo, ask Claude to read it, and return the results."""
@@ -93,10 +118,13 @@ def translate():
     if photo is None:
         return jsonify({"error": "No photo was uploaded."}), 400
 
-    # 2. Convert the photo into the text-based format the AI expects (base64).
-    image_bytes = photo.read()
-    image_data = base64.standard_b64encode(image_bytes).decode("utf-8")
-    media_type = photo.mimetype or "image/jpeg"
+    # 2. Normalize the photo to a JPEG and encode it for the AI.
+    try:
+        jpeg_bytes = to_jpeg(photo.read())
+    except Exception:  # noqa: BLE001
+        return jsonify({"error": "无法读取这张照片，请重试或换一张。(Could not read that photo.)"}), 400
+    image_data = base64.standard_b64encode(jpeg_bytes).decode("utf-8")
+    media_type = "image/jpeg"
 
     # 3. Send the photo + instructions to Claude.
     try:
@@ -126,6 +154,8 @@ def translate():
 
     # 4. Claude replies with JSON text. Sometimes it wraps the JSON in markdown
     #    ```json ... ``` fences, so we clean those off before reading it.
+    if not message.content:
+        return jsonify({"error": "The AI returned an empty reply. Please try again."}), 500
     reply_text = message.content[0].text.strip()
     if reply_text.startswith("```"):
         reply_text = reply_text.split("```")[1]  # take the part inside the fences
@@ -167,6 +197,13 @@ def images():
         urls = []
 
     return jsonify({"images": urls})
+
+
+@app.errorhandler(Exception)
+def handle_any_error(error):
+    """Safety net: if anything unexpected goes wrong, reply with JSON (not an
+    HTML error page) so the web page can always show a friendly message."""
+    return jsonify({"error": f"出错了，请重试。(Unexpected error: {error})"}), 500
 
 
 if __name__ == "__main__":

@@ -1,0 +1,12 @@
+# Never share these — they contain your secret API key
+.env
+
+# Python junk we don't need to keep
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Local-only files
+server.log
+*.log

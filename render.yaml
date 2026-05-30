@@ -1,0 +1,14 @@
+# Tells Render how to build and run the app.
+services:
+  - type: web
+    name: menu-translator
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    # gunicorn is the production server; it must listen on the port Render gives us.
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    envVars:
+      # We do NOT put the secret key here. We'll paste it into Render's
+      # dashboard instead, so it stays private. sync:false means "ask me for it".
+      - key: ANTHROPIC_API_KEY
+        sync: false

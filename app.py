@@ -29,7 +29,9 @@ load_dotenv(override=True)
 #  or "claude-haiku-4-5-20251001" for the cheapest.)
 MODEL = "claude-sonnet-4-6"
 
-app = Flask(__name__)
+# template_folder="." means index.html sits right next to app.py (a simple,
+# flat layout — no subfolders needed).
+app = Flask(__name__, template_folder=".")
 client = Anthropic()  # automatically reads ANTHROPIC_API_KEY from the environment
 
 # These instructions tell Claude exactly what to do with the menu photo.

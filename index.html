@@ -191,20 +191,39 @@
 
       status.innerHTML = '<span class="spinner"></span>正在翻译菜单…';
 
-      const formData = new FormData();
-      formData.append('photo', fileInput.files[0]);
+      const file = fileInput.files[0];
+
+      // The free server "sleeps" when idle and takes ~50s to wake up. Instead of
+      // erroring, we quietly retry for up to ~80s while it wakes — so your dad
+      // just waits a moment and it finishes on its own.
+      async function translateWithWakeup() {
+        const deadline = Date.now() + 80000;
+        let wokeMsgShown = false;
+        while (true) {
+          const formData = new FormData();
+          formData.append('photo', file);
+          try {
+            const response = await fetch('/translate', { method: 'POST', body: formData });
+            const raw = await response.text();
+            try {
+              return JSON.parse(raw);  // got real JSON — done
+            } catch (parseErr) {
+              // non-JSON (server still waking). Fall through to wait & retry.
+            }
+          } catch (netErr) {
+            // network blip while waking. Fall through to wait & retry.
+          }
+          if (Date.now() > deadline) return { error: '服务器一直没有响应，请稍后再试。(Server did not respond — please try again later.)' };
+          if (!wokeMsgShown) {
+            status.innerHTML = '<span class="spinner"></span>正在唤醒服务器，请稍候…(Waking up, please wait ~1 min)';
+            wokeMsgShown = true;
+          }
+          await new Promise(r => setTimeout(r, 5000));  // wait 5s, then retry
+        }
+      }
 
       try {
-        const response = await fetch('/translate', { method: 'POST', body: formData });
-        // Read as text first, then parse — so a non-JSON reply never crashes the page.
-        const raw = await response.text();
-        let data;
-        try {
-          data = JSON.parse(raw);
-        } catch (parseErr) {
-          status.textContent = '服务器正在唤醒，请过一会儿再试一次。(Server waking up — please try again in a moment.)';
-          return;
-        }
+        const data = await translateWithWakeup();
 
         if (data.error) { status.textContent = '出错了：' + data.error; return; }
 

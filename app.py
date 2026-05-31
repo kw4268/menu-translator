@@ -19,7 +19,6 @@ import urllib.parse
 import urllib.request
 
 from anthropic import Anthropic
-from ddgs import DDGS
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 from PIL import Image
@@ -199,44 +198,53 @@ def google_images(query):
         return []
 
 
+def pexels_images(query):
+    """Search Pexels for food photos. Reliable from servers and always real,
+    safe photos. Returns a list of image URLs (empty if not configured/fails)."""
+    api_key = os.environ.get("PEXELS_API_KEY")
+    if not api_key:
+        return []
+
+    url = "https://api.pexels.com/v1/search?" + urllib.parse.urlencode({
+        "query": query,
+        "per_page": 3,
+        "orientation": "landscape",
+    })
+    # Pexels sits behind Cloudflare, which blocks requests that don't look like a
+    # browser — so we send a normal browser User-Agent along with the API key.
+    request_obj = urllib.request.Request(url, headers={
+        "Authorization": api_key,
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    })
+    try:
+        with urllib.request.urlopen(request_obj, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return [p["src"]["large"] for p in data.get("photos", []) if p.get("src")]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 @app.route("/images")
 def images():
-    """Find 2-3 web photos for a dish. The web page calls this for each dish,
+    """Find up to 3 photos for a dish. The web page calls this for each dish,
     passing the dish name like /images?q=Margherita%20Pizza."""
     query = request.args.get("q", "").strip()
     if not query:
         return jsonify({"images": []})
 
-    # A safety backstop: never show images from these adult/unsafe domains,
-    # even if a search somehow returns one.
+    # A safety backstop: never show images from these adult/unsafe domains.
     BLOCKED = ("xhcdn", "xhamster", "pornhub", "phncdn", "xvideos",
                "xnxx", "redtube", "porn", "nsfw", "adult")
 
     def is_safe(url):
         return url and not any(bad in url.lower() for bad in BLOCKED)
 
-    # Preferred: Google Images (reliable + strong safe-search). Falls back to the
-    # free search if Google isn't configured or hits a hiccup.
-    urls = google_images(f"{query} food")
+    # Use Google Images if it's configured (best coverage); otherwise Pexels
+    # (reliable, real food photos). If neither has a match, the page shows a
+    # clean "no photo" placeholder — we never show wrong/random images.
+    urls = google_images(f"{query} food") or pexels_images(query)
     urls = [u for u in urls if is_safe(u)][:3]
-
-    if not urls:  # free-search fallback
-        # The free source is throttled from servers and often returns just one
-        # photo per query, so we try a few wordings and combine the unique,
-        # safe results until we have up to 3.
-        collected = []
-        for variant in (f"{query} food", f"{query} dish", f"{query} recipe"):
-            try:
-                results = DDGS().images(variant, safesearch="on", max_results=10)
-                for r in results:
-                    u = r.get("image")
-                    if is_safe(u) and u not in collected:
-                        collected.append(u)
-            except Exception:  # noqa: BLE001
-                pass
-            if len(collected) >= 3:
-                break
-        urls = collected[:3]
 
     return jsonify({"images": urls})
 

@@ -1,7 +1,6 @@
 flask
 anthropic
 python-dotenv
-ddgs
 gunicorn
 Pillow
 pillow-heif

@@ -111,6 +111,33 @@ def to_jpeg(raw_bytes):
     return buffer.getvalue()
 
 
+def parse_dishes(message):
+    """Pull the JSON out of Claude's reply, tolerating markdown ``` fences or any
+    stray text around it. Returns a dict, or None if it can't be parsed."""
+    if not message.content:
+        return None
+    text = message.content[0].text.strip()
+    # Remove markdown code fences if present.
+    if text.startswith("```"):
+        parts = text.split("```")
+        text = parts[1] if len(parts) > 1 else text
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    # Try the text as-is, then just the {...} slice (handles extra prose around it).
+    candidates = [text]
+    if "{" in text and "}" in text:
+        candidates.append(text[text.find("{"): text.rfind("}") + 1])
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict) and "dishes" in parsed:
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None
+
+
 @app.route("/translate", methods=["POST"])
 def translate():
     """Receive a menu photo, ask Claude to read it, and return the results."""
@@ -127,11 +154,13 @@ def translate():
     image_data = base64.standard_b64encode(jpeg_bytes).decode("utf-8")
     media_type = "image/jpeg"
 
-    # 3. Send the photo + instructions to Claude.
-    try:
-        message = client.messages.create(
+    # 3. Ask Claude to read & translate the menu. max_tokens is generous so big
+    #    menus don't get cut off. We try up to twice in case a reply comes back
+    #    in an unparseable shape.
+    def ask_claude():
+        return client.messages.create(
             model=MODEL,
-            max_tokens=4000,
+            max_tokens=8000,
             system=SYSTEM_PROMPT,
             messages=[
                 {
@@ -150,25 +179,21 @@ def translate():
                 }
             ],
         )
-    except Exception as error:  # noqa: BLE001 - show any problem plainly to the user
-        return jsonify({"error": f"The AI request failed: {error}"}), 500
 
-    # 4. Claude replies with JSON text. Sometimes it wraps the JSON in markdown
-    #    ```json ... ``` fences, so we clean those off before reading it.
-    if not message.content:
-        return jsonify({"error": "The AI returned an empty reply. Please try again."}), 500
-    reply_text = message.content[0].text.strip()
-    if reply_text.startswith("```"):
-        reply_text = reply_text.split("```")[1]  # take the part inside the fences
-        if reply_text.startswith("json"):
-            reply_text = reply_text[len("json"):]
-        reply_text = reply_text.strip()
+    data = None
+    for attempt in range(2):
+        try:
+            message = ask_claude()
+        except Exception as error:  # noqa: BLE001 - show any problem plainly
+            return jsonify({"error": f"The AI request failed: {error}"}), 500
+        data = parse_dishes(message)
+        if data is not None:
+            break
 
-    # 5. Turn the text into real data and hand it back to the web page.
-    try:
-        data = json.loads(reply_text)
-    except json.JSONDecodeError:
-        return jsonify({"error": "The AI's reply was not in the expected format. Please try again."}), 500
+    # 4. If we still couldn't read a clean reply, ask the user to retry.
+    if data is None:
+        return jsonify({"error": "菜单较复杂，没能完整读取，请重试或拍清晰一点的照片。"
+                                 "(Couldn't read the menu cleanly — please try again.)"}), 500
 
     return jsonify(data)
 

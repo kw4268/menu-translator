@@ -15,6 +15,8 @@ import base64
 import io
 import json
 import os
+import urllib.parse
+import urllib.request
 
 from anthropic import Anthropic
 from ddgs import DDGS
@@ -172,6 +174,31 @@ def translate():
     return jsonify(data)
 
 
+def google_images(query):
+    """Search Google Images via the Custom Search API. Returns a list of image
+    URLs (empty if Google isn't configured or the request fails)."""
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    cx = os.environ.get("GOOGLE_CX")
+    if not api_key or not cx:
+        return []  # not configured — caller will use the fallback search
+
+    params = urllib.parse.urlencode({
+        "key": api_key,
+        "cx": cx,
+        "q": query,
+        "searchType": "image",
+        "num": 5,
+        "safe": "active",   # Google's safe-search
+    })
+    url = "https://www.googleapis.com/customsearch/v1?" + params
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return [item["link"] for item in data.get("items", []) if item.get("link")]
+    except Exception:  # noqa: BLE001 - any failure -> let caller fall back
+        return []
+
+
 @app.route("/images")
 def images():
     """Find 2-3 web photos for a dish. The web page calls this for each dish,
@@ -182,19 +209,23 @@ def images():
 
     # A safety backstop: never show images from these adult/unsafe domains,
     # even if a search somehow returns one.
-    BLOCKED = ("xhcdn", "xhamster", "pornhub", "phncdn", "rt.com", "xvideos",
+    BLOCKED = ("xhcdn", "xhamster", "pornhub", "phncdn", "xvideos",
                "xnxx", "redtube", "porn", "nsfw", "adult")
 
-    try:
-        # safesearch="on" filters out explicit results. We also add "food" to
-        # the query to firmly bias the search toward food photos.
-        results = DDGS().images(f"{query} food", safesearch="on", max_results=10)
-        urls = [
-            r["image"] for r in results
-            if r.get("image") and not any(bad in r["image"].lower() for bad in BLOCKED)
-        ][:3]
-    except Exception:  # noqa: BLE001 - if search fails, just show no photos
-        urls = []
+    def is_safe(url):
+        return url and not any(bad in url.lower() for bad in BLOCKED)
+
+    # Preferred: Google Images (reliable + strong safe-search). Falls back to the
+    # free search if Google isn't configured or hits a hiccup.
+    urls = google_images(f"{query} food")
+    urls = [u for u in urls if is_safe(u)][:3]
+
+    if not urls:  # fallback
+        try:
+            results = DDGS().images(f"{query} food", safesearch="on", max_results=10)
+            urls = [r["image"] for r in results if is_safe(r.get("image"))][:3]
+        except Exception:  # noqa: BLE001
+            urls = []
 
     return jsonify({"images": urls})
 

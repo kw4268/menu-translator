@@ -198,31 +198,6 @@ def translate():
     return jsonify(data)
 
 
-def google_images(query):
-    """Search Google Images via the Custom Search API. Returns a list of image
-    URLs (empty if Google isn't configured or the request fails)."""
-    api_key = os.environ.get("GOOGLE_API_KEY")
-    cx = os.environ.get("GOOGLE_CX")
-    if not api_key or not cx:
-        return []  # not configured — caller will use the fallback search
-
-    params = urllib.parse.urlencode({
-        "key": api_key,
-        "cx": cx,
-        "q": query,
-        "searchType": "image",
-        "num": 5,
-        "safe": "active",   # Google's safe-search
-    })
-    url = "https://www.googleapis.com/customsearch/v1?" + params
-    try:
-        with urllib.request.urlopen(url, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        return [item["link"] for item in data.get("items", []) if item.get("link")]
-    except Exception:  # noqa: BLE001 - any failure -> let caller fall back
-        return []
-
-
 def pexels_images(query):
     """Search Pexels for food photos. Reliable from servers and always real,
     safe photos. Returns a list of image URLs (empty if not configured/fails)."""
@@ -265,11 +240,10 @@ def images():
     def is_safe(url):
         return url and not any(bad in url.lower() for bad in BLOCKED)
 
-    # Use Google Images if it's configured (best coverage); otherwise Pexels
-    # (reliable, real food photos). If neither has a match, the page shows a
-    # clean "no photo" placeholder — we never show wrong/random images.
-    urls = google_images(f"{query} food") or pexels_images(query)
-    urls = [u for u in urls if is_safe(u)][:3]
+    # Photos come from Pexels (reliable, real, safe food photos). If there's no
+    # match, the page shows a clean "no photo" placeholder — we never show
+    # wrong/random images.
+    urls = [u for u in pexels_images(query) if is_safe(u)][:3]
 
     return jsonify({"images": urls})
 

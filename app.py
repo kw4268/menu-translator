@@ -220,12 +220,23 @@ def images():
     urls = google_images(f"{query} food")
     urls = [u for u in urls if is_safe(u)][:3]
 
-    if not urls:  # fallback
-        try:
-            results = DDGS().images(f"{query} food", safesearch="on", max_results=10)
-            urls = [r["image"] for r in results if is_safe(r.get("image"))][:3]
-        except Exception:  # noqa: BLE001
-            urls = []
+    if not urls:  # free-search fallback
+        # The free source is throttled from servers and often returns just one
+        # photo per query, so we try a few wordings and combine the unique,
+        # safe results until we have up to 3.
+        collected = []
+        for variant in (f"{query} food", f"{query} dish", f"{query} recipe"):
+            try:
+                results = DDGS().images(variant, safesearch="on", max_results=10)
+                for r in results:
+                    u = r.get("image")
+                    if is_safe(u) and u not in collected:
+                        collected.append(u)
+            except Exception:  # noqa: BLE001
+                pass
+            if len(collected) >= 3:
+                break
+        urls = collected[:3]
 
     return jsonify({"images": urls})
 

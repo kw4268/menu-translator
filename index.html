@@ -189,21 +189,26 @@
       results.innerHTML = '';
       if (!fileInput.files.length) return;
 
-      status.innerHTML = '<span class="spinner"></span>正在翻译菜单…';
+      status.innerHTML = '<span class="spinner"></span>正在翻译菜单…(大菜单可能需要约1分钟)';
 
       const file = fileInput.files[0];
 
-      // The free server "sleeps" when idle and takes ~50s to wake up. Instead of
-      // erroring, we quietly retry for up to ~80s while it wakes — so your dad
-      // just waits a moment and it finishes on its own.
+      // The free server "sleeps" when idle (~50s to wake), and big menus take the
+      // AI up to ~1 min to read. We give each try its OWN time limit so it can
+      // never hang forever, and retry for up to ~4 minutes total while waking.
       async function translateWithWakeup() {
-        const deadline = Date.now() + 80000;
-        let wokeMsgShown = false;
+        const deadline = Date.now() + 240000;   // give up after ~4 minutes
+        let waited = false;
         while (true) {
+          const controller = new AbortController();
+          // Hard limit per attempt so a stuck request aborts instead of hanging.
+          const timer = setTimeout(() => controller.abort(), 115000);
           const formData = new FormData();
           formData.append('photo', file);
           try {
-            const response = await fetch('/translate', { method: 'POST', body: formData });
+            const response = await fetch('/translate',
+              { method: 'POST', body: formData, signal: controller.signal });
+            clearTimeout(timer);
             const raw = await response.text();
             try {
               return JSON.parse(raw);  // got real JSON — done
@@ -211,14 +216,16 @@
               // non-JSON (server still waking). Fall through to wait & retry.
             }
           } catch (netErr) {
-            // network blip while waking. Fall through to wait & retry.
+            clearTimeout(timer);  // aborted (timeout) or network blip — retry
           }
-          if (Date.now() > deadline) return { error: '服务器一直没有响应，请稍后再试。(Server did not respond — please try again later.)' };
-          if (!wokeMsgShown) {
-            status.innerHTML = '<span class="spinner"></span>正在唤醒服务器，请稍候…(Waking up, please wait ~1 min)';
-            wokeMsgShown = true;
+          if (Date.now() > deadline) {
+            return { error: '服务器一直没有响应，请稍后再试。(Server did not respond — please try again later.)' };
           }
-          await new Promise(r => setTimeout(r, 5000));  // wait 5s, then retry
+          if (!waited) {
+            status.innerHTML = '<span class="spinner"></span>服务器较慢或正在唤醒，请稍候…(Waking up / busy — please wait)';
+            waited = true;
+          }
+          await new Promise(r => setTimeout(r, 4000));  // wait, then retry
         }
       }
 
